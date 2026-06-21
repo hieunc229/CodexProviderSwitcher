@@ -32,12 +32,28 @@ struct OpenAIAuthManager {
     }
 
     func validateAccount(_ account: OpenAIAccount) async -> OpenAICredentialCheckResult {
+        if accessTokenIsUsable(account.authJSON) {
+            return OpenAICredentialCheckResult(status: .valid, message: nil, authJSON: nil)
+        }
+
         do {
             let refreshedAuthJSON = try await refreshAuthJSON(account.authJSON)
             return OpenAICredentialCheckResult(status: .valid, message: nil, authJSON: refreshedAuthJSON)
         } catch {
             return OpenAICredentialCheckResult(status: .invalid, message: "Not valid. Please re-login.")
         }
+    }
+
+    private func accessTokenIsUsable(_ authJSON: String) -> Bool {
+        guard let data = authJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = object["tokens"] as? [String: Any],
+              let accessToken = tokens["access_token"] as? String,
+              let expirationDate = jwtExpirationDate(accessToken) else {
+            return false
+        }
+
+        return expirationDate.timeIntervalSinceNow > 300
     }
 
     private func refreshAuthJSON(_ authJSON: String) async throws -> String {
@@ -153,6 +169,18 @@ struct OpenAIAuthManager {
         }
 
         return payload["email"] as? String
+    }
+
+    private func jwtExpirationDate(_ token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count > 1,
+              let payloadData = base64URLDecode(String(parts[1])),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let exp = payload["exp"] as? TimeInterval else {
+            return nil
+        }
+
+        return Date(timeIntervalSince1970: exp)
     }
 
     private func base64URLDecode(_ value: String) -> Data? {
